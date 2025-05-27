@@ -4,25 +4,75 @@
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/strand.hpp>
 #include <boost/config.hpp>
+#include <nlohmann/json.hpp>
 #include <iostream>
 #include <memory>
 #include <string>
 #include <thread>
+#include <map>
 
 namespace beast = boost::beast; // from <boost/beast.hpp>
 namespace http = beast::http;   // from <boost/beast/http.hpp>
 namespace net = boost::asio;    // from <boost/asio.hpp>
 using tcp = net::ip::tcp;       // from <boost/asio/ip/tcp.hpp>
 
+std::map<std::string, std::string> shortened_to_original;
+
+std::string custom_prefix = "AAAA";
+
+void increment_custom_prefix() {
+    for (int i = custom_prefix.size() - 1; i > -1; --i) {
+        if (custom_prefix[i] == 'Z') {
+            custom_prefix[i] = 'A';
+        }
+        else {
+            custom_prefix[i]++;
+            return;
+        }
+    }
+}
+
+std::string shorten_url(std::string request_url) {
+    std::string response_url = "localhost:8080/" + custom_prefix;
+    increment_custom_prefix();
+    shortened_to_original[response_url] = request_url;
+    return response_url;
+}
+
 // this function produces an HTTP response for the given request
 http::response<http::string_body> handle_request(http::request<http::string_body> const& req) {
-    // respond to GET request with "Hello, World!"
     if (req.method() == http::verb::get) {
+        // respond to GET request with "Hello, World!"
         http::response<http::string_body> res{http::status::ok, req.version()};
         res.set(http::field::server, "Beast");
         res.set(http::field::content_type, "text/plain");
         res.keep_alive(req.keep_alive());
         res.body() = "Hello, World!";
+        res.prepare_payload();
+        return res;
+    }
+    else if (req.method() == http::verb::post) {
+        // respond to POST request with a URL
+        auto json_request = nlohmann::json::parse(req.body());
+        std::string request_url = json_request.dump();
+        request_url = request_url.substr(1, request_url.size() - 2); // removing double qoutes
+        std::cout << "received url is: " << request_url << std::endl;
+
+        // if this is a shortened url, it will have the corresponding original url mapped, else we shorten it
+        std::string response_url;
+        if (shortened_to_original.find(request_url) == shortened_to_original.end()) {
+            response_url = shorten_url(request_url);
+        }
+        else {
+            response_url = shortened_to_original[request_url];
+        }
+
+        nlohmann::json json_reponse = {{"shortened url", response_url}};
+        http::response<http::string_body> res{http::status::ok, req.version()};
+        res.set(http::field::server, "Beast");
+        res.set(http::field::content_type, "application/json");
+        res.keep_alive(req.keep_alive());
+        res.body() = json_reponse.dump();
         res.prepare_payload();
         return res;
     }
